@@ -71,24 +71,30 @@ def detect_anomaly():
     prediction = model.predict(new_features)[0]   # -1 = anomaly, 1 = normal
     score = model.decision_function(new_features)[0]
 
-    is_anomaly = prediction == -1
+    is_anomaly = bool(prediction == -1)
     reasons = []
-    amount = txn["amount"]
-    hour = datetime.fromisoformat(txn["timestamp"]).hour if "timestamp" in txn else 12
+    amount = float(txn["amount"])
+
+    try:
+        hour = datetime.fromisoformat(txn["timestamp"]).hour
+    except Exception:
+        hour = 12
 
     if amount > 15000:
-        reasons.append(f"Very high withdrawal amount: ₹{amount}")
+        reasons.append(f"Very high withdrawal amount: ₹{amount:,.0f}")
     if hour < 6 or hour > 22:
-        reasons.append(f"Transaction at unusual hour: {hour}:00")
-    if amount == 20000:
-        reasons.append("Maximum withdrawal limit hit - possible card cloning")
+        reasons.append(f"Transaction at unusual hour: {hour:02d}:00")
+    if amount >= 20000:
+        reasons.append("Maximum withdrawal limit hit — possible card cloning")
+    if amount > 10000 and (hour < 6 or hour > 22):
+        reasons.append("High amount combined with off-hours timing — elevated risk")
 
     return jsonify({
         "transaction": txn,
         "is_anomaly": is_anomaly,
         "anomaly_score": round(float(score), 4),
         "risk_level": "High" if is_anomaly else "Normal",
-        "reasons": reasons if is_anomaly else ["Transaction appears normal"],
+        "reasons": reasons if reasons else (["Transaction appears normal"] if not is_anomaly else ["Flagged by ML model"]),
         "recommendation": "Flag for manual review and notify cardholder" if is_anomaly else "No action required"
     }), 200
 

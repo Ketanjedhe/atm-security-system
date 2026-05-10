@@ -73,9 +73,12 @@ export default function Dashboard() {
   const [burp, setBurp] = useState(null);
   const [scanning, setScanning] = useState(false);
   const [scanTarget, setScanTarget] = useState("127.0.0.1");
-  const [anomalyInput, setAnomalyInput] = useState({ amount: "", timestamp: "", type: "WITHDRAWAL" });
+  const [anomalyInput, setAnomalyInput] = useState({ amount: "", datetimeLocal: "", type: "WITHDRAWAL" });
   const [anomalyResult, setAnomalyResult] = useState(null);
   const [anomalyLoading, setAnomalyLoading] = useState(false);
+  const [anomalyError, setAnomalyError] = useState("");
+  const [analyzeAllResult, setAnalyzeAllResult] = useState(null);
+  const [analyzeAllLoading, setAnalyzeAllLoading] = useState(false);
 
   useEffect(() => {
     api.get("/security/vulnerabilities").then(r => setVulns(r.data.vulnerabilities)).catch(() => {});
@@ -115,18 +118,37 @@ export default function Dashboard() {
 
   const detectAnomaly = async () => {
     if (!anomalyInput.amount) return;
+    setAnomalyError("");
+    setAnomalyResult(null);
     setAnomalyLoading(true);
     try {
+      // Convert datetime-local string to ISO — fix for blank input bug
+      const isoTimestamp = anomalyInput.datetimeLocal
+        ? new Date(anomalyInput.datetimeLocal).toISOString()
+        : new Date().toISOString();
       const res = await api.post("/anomaly/detect", {
         amount: parseFloat(anomalyInput.amount),
-        timestamp: anomalyInput.timestamp || new Date().toISOString(),
+        timestamp: isoTimestamp,
         type: anomalyInput.type
       });
       setAnomalyResult(res.data);
     } catch (e) {
-      alert("Detection failed");
+      setAnomalyError(e.response?.data?.error || "Detection failed. Is the backend running?");
     } finally {
       setAnomalyLoading(false);
+    }
+  };
+
+  const runAnalyzeAll = async () => {
+    setAnalyzeAllLoading(true);
+    setAnalyzeAllResult(null);
+    try {
+      const res = await api.get("/anomaly/analyze-all");
+      setAnalyzeAllResult(res.data);
+    } catch (e) {
+      setAnomalyError(e.response?.data?.error || "Batch analysis failed.");
+    } finally {
+      setAnalyzeAllLoading(false);
     }
   };
 
@@ -294,57 +316,193 @@ export default function Dashboard() {
 
       {/* ANOMALY DETECTION */}
       {tab === "Anomaly Detection" && (
-        <div style={s.card}>
-          <div style={s.sectionTitle}>🤖 ML Anomaly Detection (Isolation Forest)</div>
-          <p style={{color: "#6b7a99", fontSize: 13, marginBottom: 16}}>
-            Enter a transaction to check if it's suspicious. The model is trained on historical ATM transactions.
-          </p>
-          <div style={s.anomalyForm}>
-            <div style={s.anomalyInput}>
-              <label style={{color: "#a0b0cc", fontSize: 12, display: "block", marginBottom: 4}}>Amount (₹)</label>
-              <input
-                type="number"
-                placeholder="e.g. 19900"
-                value={anomalyInput.amount}
-                onChange={e => setAnomalyInput({...anomalyInput, amount: e.target.value})}
-                aria-label="Transaction amount"
-              />
+        <div>
+          {/* Single Transaction Check */}
+          <div style={s.card}>
+            <div style={s.sectionTitle}>🤖 Single Transaction Check — Isolation Forest ML</div>
+            <p style={{color: "#6b7a99", fontSize: 13, marginBottom: 16}}>
+              Enter a transaction to check if it's suspicious. Model is trained on historical ATM data.
+            </p>
+            <div style={s.anomalyForm}>
+              <div style={s.anomalyInput}>
+                <label style={{color: "#a0b0cc", fontSize: 12, display: "block", marginBottom: 4}}>Amount (₹)</label>
+                <input
+                  type="number"
+                  placeholder="e.g. 19900"
+                  value={anomalyInput.amount}
+                  onChange={e => setAnomalyInput({...anomalyInput, amount: e.target.value})}
+                  aria-label="Transaction amount"
+                />
+              </div>
+              <div style={s.anomalyInput}>
+                <label style={{color: "#a0b0cc", fontSize: 12, display: "block", marginBottom: 4}}>
+                  Date & Time <span style={{color:"#4a5568"}}>(leave blank = now)</span>
+                </label>
+                {/* Store datetimeLocal separately — avoids the blank-input ISO conversion bug */}
+                <input
+                  type="datetime-local"
+                  value={anomalyInput.datetimeLocal}
+                  onChange={e => setAnomalyInput({...anomalyInput, datetimeLocal: e.target.value})}
+                  aria-label="Transaction date and time"
+                />
+              </div>
+              <div style={s.anomalyInput}>
+                <label style={{color: "#a0b0cc", fontSize: 12, display: "block", marginBottom: 4}}>Type</label>
+                <select
+                  value={anomalyInput.type}
+                  onChange={e => setAnomalyInput({...anomalyInput, type: e.target.value})}
+                  style={{background:"#111827", color:"#e0e6f0", border:"1.5px solid #2a3a5c",
+                    borderRadius:6, padding:"10px 14px", width:"100%", fontSize:14}}
+                  aria-label="Transaction type"
+                >
+                  <option value="WITHDRAWAL">WITHDRAWAL</option>
+                  <option value="DEPOSIT">DEPOSIT</option>
+                </select>
+              </div>
+              <div style={{display: "flex", alignItems: "flex-end"}}>
+                <button style={s.anomalyBtn} onClick={detectAnomaly} disabled={anomalyLoading || !anomalyInput.amount}>
+                  {anomalyLoading ? "Analyzing..." : "🔍 Detect Anomaly"}
+                </button>
+              </div>
             </div>
-            <div style={s.anomalyInput}>
-              <label style={{color: "#a0b0cc", fontSize: 12, display: "block", marginBottom: 4}}>Timestamp</label>
-              <input
-                type="datetime-local"
-                value={anomalyInput.timestamp}
-                onChange={e => setAnomalyInput({...anomalyInput, timestamp: new Date(e.target.value).toISOString()})}
-                aria-label="Transaction timestamp"
-              />
+
+            {/* Quick test buttons */}
+            <div style={{display:"flex", gap:8, flexWrap:"wrap", marginBottom: 8}}>
+              <span style={{color:"#4a5568", fontSize:12, alignSelf:"center"}}>Quick test:</span>
+              {[
+                {label:"Normal ₹1000 (10AM)", amount:"1000", hour:"10"},
+                {label:"Suspicious ₹19900 (3AM)", amount:"19900", hour:"03"},
+                {label:"Max ₹20000 (2AM)", amount:"20000", hour:"02"},
+              ].map((t,i) => {
+                const dt = new Date();
+                dt.setHours(parseInt(t.hour), 0, 0, 0);
+                const pad = n => String(n).padStart(2,"0");
+                const local = `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:00`;
+                return (
+                  <button key={i}
+                    style={{background:"#1a2540", color:"#a0b0cc", border:"1px solid #2a3a5c",
+                      padding:"5px 12px", borderRadius:16, fontSize:12}}
+                    onClick={() => setAnomalyInput({amount: t.amount, datetimeLocal: local, type:"WITHDRAWAL"})}>
+                    {t.label}
+                  </button>
+                );
+              })}
             </div>
-            <div style={{display: "flex", alignItems: "flex-end"}}>
-              <button style={s.anomalyBtn} onClick={detectAnomaly} disabled={anomalyLoading || !anomalyInput.amount}>
-                {anomalyLoading ? "Analyzing..." : "Detect Anomaly"}
-              </button>
-            </div>
+
+            {anomalyError && (
+              <div style={{background:"#2a0a0a", border:"1px solid #ff1744", borderRadius:8,
+                padding:"10px 14px", color:"#ff5252", fontSize:13, marginTop:8}}>
+                ⚠️ {anomalyError}
+              </div>
+            )}
+
+            {anomalyResult && (
+              <div style={s.resultBox(anomalyResult.is_anomaly)}>
+                <div style={{fontSize: 20, fontWeight: 700,
+                  color: anomalyResult.is_anomaly ? "#ff1744" : "#00e676", marginBottom: 10}}>
+                  {anomalyResult.is_anomaly ? "⚠️ ANOMALY DETECTED" : "✅ Transaction Normal"}
+                </div>
+                <div style={{display:"flex", gap:20, flexWrap:"wrap", marginBottom:10}}>
+                  <div style={{color:"#a0b0cc", fontSize:13}}>
+                    Anomaly Score: <strong style={{color:"#e0e6f0"}}>{anomalyResult.anomaly_score}</strong>
+                    <span style={{color:"#4a5568", fontSize:11, marginLeft:6}}>(negative = more anomalous)</span>
+                  </div>
+                  <div>
+                    Risk: <span style={s.badge(anomalyResult.risk_level)}>{anomalyResult.risk_level}</span>
+                  </div>
+                </div>
+                <div style={{color:"#c0cce0", fontSize:13, marginBottom:8}}>
+                  <strong>Reasons:</strong>
+                  <ul style={{paddingLeft:16, marginTop:4}}>
+                    {anomalyResult.reasons.map((r, i) => <li key={i} style={{marginBottom:3}}>{r}</li>)}
+                  </ul>
+                </div>
+                <div style={{color:"#6b7a99", fontSize:12, borderTop:"1px solid #1e2d4a", paddingTop:8, marginTop:8}}>
+                  💡 {anomalyResult.recommendation}
+                </div>
+              </div>
+            )}
           </div>
-          {anomalyResult && (
-            <div style={s.resultBox(anomalyResult.is_anomaly)}>
-              <div style={{fontSize: 20, fontWeight: 700, color: anomalyResult.is_anomaly ? "#ff1744" : "#00e676", marginBottom: 8}}>
-                {anomalyResult.is_anomaly ? "⚠️ ANOMALY DETECTED" : "✅ Transaction Normal"}
+
+          {/* Batch Analysis */}
+          <div style={{...s.card, marginTop: 20}}>
+            <div style={s.sectionTitle}>📊 Batch Analysis — All Transactions</div>
+            <p style={{color:"#6b7a99", fontSize:13, marginBottom:14}}>
+              Run the ML model against all stored transactions at once to find every anomaly in the database.
+            </p>
+            <button
+              style={{background:"#7c3aed", color:"#fff", padding:"10px 24px", marginBottom:16}}
+              onClick={runAnalyzeAll}
+              disabled={analyzeAllLoading}
+            >
+              {analyzeAllLoading ? "Analyzing all transactions..." : "🧠 Run Batch Anomaly Analysis"}
+            </button>
+
+            {analyzeAllResult && (
+              <div>
+                {/* Summary stats */}
+                <div style={{display:"flex", gap:16, flexWrap:"wrap", marginBottom:16}}>
+                  <div style={{...s.card, flex:1, textAlign:"center", minWidth:120}}>
+                    <div style={{fontSize:28, fontWeight:800, color:"#4f8ef7"}}>
+                      {analyzeAllResult.total_analyzed}
+                    </div>
+                    <div style={{color:"#6b7a99", fontSize:12}}>Total Analyzed</div>
+                  </div>
+                  <div style={{...s.card, flex:1, textAlign:"center", minWidth:120}}>
+                    <div style={{fontSize:28, fontWeight:800, color:"#ff1744"}}>
+                      {analyzeAllResult.anomalies_found}
+                    </div>
+                    <div style={{color:"#6b7a99", fontSize:12}}>Anomalies Found</div>
+                  </div>
+                  <div style={{...s.card, flex:1, textAlign:"center", minWidth:120}}>
+                    <div style={{fontSize:28, fontWeight:800, color:"#00c853"}}>
+                      {analyzeAllResult.total_analyzed - analyzeAllResult.anomalies_found}
+                    </div>
+                    <div style={{color:"#6b7a99", fontSize:12}}>Normal Transactions</div>
+                  </div>
+                </div>
+
+                {/* Anomalies table */}
+                {analyzeAllResult.anomalies_found > 0 && (
+                  <>
+                    <div style={{color:"#ff5252", fontWeight:600, fontSize:14, marginBottom:8}}>
+                      ⚠️ Flagged Transactions
+                    </div>
+                    <table style={s.table}>
+                      <thead>
+                        <tr>
+                          {["Amount","Type","Timestamp","Anomaly Score","Status"].map(h =>
+                            <th key={h} style={s.th}>{h}</th>
+                          )}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {analyzeAllResult.anomalies.map((r, i) => (
+                          <tr key={i}>
+                            <td style={s.td}>₹{r.transaction.amount?.toLocaleString("en-IN")}</td>
+                            <td style={s.td}>{r.transaction.type}</td>
+                            <td style={s.td}>{r.transaction.timestamp?.slice(0,19).replace("T"," ")}</td>
+                            <td style={s.td}>
+                              <span style={{color:"#ff5252", fontFamily:"monospace"}}>{r.score}</span>
+                            </td>
+                            <td style={s.td}>
+                              <span style={s.badge("High")}>ANOMALY</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </>
+                )}
+
+                {analyzeAllResult.anomalies_found === 0 && (
+                  <div style={{color:"#00c853", textAlign:"center", padding:20, fontSize:14}}>
+                    ✅ No anomalies found in transaction history
+                  </div>
+                )}
               </div>
-              <div style={{color: "#a0b0cc", fontSize: 13, marginBottom: 8}}>
-                Anomaly Score: {anomalyResult.anomaly_score} &nbsp;|&nbsp;
-                Risk: <span style={s.badge(anomalyResult.risk_level)}>{anomalyResult.risk_level}</span>
-              </div>
-              <div style={{color: "#c0cce0", fontSize: 13}}>
-                <strong>Reasons:</strong>
-                <ul style={{paddingLeft: 16, marginTop: 4}}>
-                  {anomalyResult.reasons.map((r, i) => <li key={i}>{r}</li>)}
-                </ul>
-              </div>
-              <div style={{color: "#6b7a99", fontSize: 12, marginTop: 8}}>
-                Recommendation: {anomalyResult.recommendation}
-              </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
 
